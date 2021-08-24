@@ -25,13 +25,79 @@ const GostHashCtx = struct {
     len: [SUM_INT_WIDTH]u32,
     partial: [HASH_BYTE_SIZE]u8,
     partial_bytes: usize,
+    const Self = @This();
 
-    pub fn reset() void {
-        .sum = .{0} ** 8;
-        .hash = .{0} ** 8;
-        .len = .{0} ** 8;
-        .partial = .{0} ** 8;
-        .partial_bytes = 0;
+    pub fn init() Self {
+        return Self { .sum = .{0} ** SUM_INT_WIDTH, .hash = .{0} ** SUM_INT_WIDTH, .len = .{0} ** SUM_INT_WIDTH, .partial = .{0} ** HASH_BYTE_SIZE, .partial_bytes = 0 };
+    }
+
+    //Mix in len bytes of data for the given buffer.
+    pub fn update(self: *Self, buf: []u8) void {
+        var i: usize = self.partial_bytes;
+            var j: usize = 0;
+            var len: usize = buf.len;
+            while (i < 32 and j < len) {
+                self.partial[i] = buf[j];
+                i += 1;
+                j += 1;
+            }
+
+            if (i < 32) {
+                self.partial_bytes = i;
+                return;
+            }
+            gosthash_bytes(self, self.partial[0..], HASH_BIT_SIZE);
+
+            while ((j + 32) < len) {
+                gosthash_bytes(self, buf[j..], HASH_BIT_SIZE);
+                j += 32;
+            }
+
+            i = 0;
+            while (j < len) {
+                self.partial[i] = buf[j];
+                i += 1;
+                j += 1;
+            }
+            self.partial_bytes = i;
+    }
+
+    // Compute and save the 32-byte digest.
+    pub fn make_final(self: *Self, digest: *[HASH_BYTE_SIZE]u8) void {
+        var i: usize = 0;
+            var j: usize = 0;
+            var a: u32 = undefined;
+
+            // adjust and mix in the last chunk
+            if (self.partial_bytes > 0) {
+                var it: usize = self.partial_bytes;
+                while (it < self.partial.len) : (it += 1) {
+                    self.partial[it] = 0;
+                }
+                gosthash_bytes(self, self.partial[0..], self.partial_bytes << 3);
+            }
+
+            // mix in the length and the sum
+            gosthash_compress(&self.hash, &self.len);
+            gosthash_compress(&self.hash, &self.sum);
+
+            // convert the output to bytes
+            while (i < 8) : (i += 1) {
+                a = self.hash[i];
+                digest[j] = @truncate(u8, a);
+                digest[j + 1] = @truncate(u8, a >> 8);
+                digest[j + 2] = @truncate(u8, a >> 16);
+                digest[j + 3] = @truncate(u8, a >> 24);
+                j += 4;
+            }
+    }
+
+    pub fn reset(self: *Self) void {
+        self.sum = .{0} ** SUM_INT_WIDTH;
+        self.hash = .{0} ** SUM_INT_WIDTH;
+        self.len = .{0} ** SUM_INT_WIDTH;
+        self.partial = .{0} ** HASH_BYTE_SIZE;
+        self.partial_bytes = 0;
     }
 };
 
@@ -257,14 +323,6 @@ fn gosthash_compress(h: *[SUM_INT_WIDTH]u32, m: *[SUM_INT_WIDTH]u32) void {
         (v[6] << 16) ^ (v[6] >> 16) ^ (v[7] << 16) ^ v[7];
 }
 
-pub fn gosthash_reset(ctx: *GostHashCtx) void {
-    ctx.sum = .{0} ** SUM_INT_WIDTH;
-    ctx.hash = .{0} ** SUM_INT_WIDTH;
-    ctx.len = .{0} ** SUM_INT_WIDTH;
-    ctx.partial = .{0} ** HASH_BYTE_SIZE;
-    ctx.partial_bytes = 0;
-}
-
 // Mix in a 32-byte chunk ("stage 3")
 fn gosthash_bytes(ctx: *GostHashCtx, buf: []u8, bits: usize) void {
     var i: usize = 0;
@@ -305,67 +363,6 @@ fn gosthash_bytes(ctx: *GostHashCtx, buf: []u8, bits: usize) void {
     }
 }
 
-//Mix in len bytes of data for the given buffer.
-pub fn gosthash_update(ctx: *GostHashCtx, buf: []u8) void {
-    var i: usize = ctx.partial_bytes;
-    var j: usize = 0;
-    var len: usize = buf.len;
-    while (i < 32 and j < len) {
-        ctx.partial[i] = buf[j];
-        i += 1;
-        j += 1;
-    }
-
-    if (i < 32) {
-        ctx.partial_bytes = i;
-        return;
-    }
-    gosthash_bytes(ctx, ctx.partial[0..], HASH_BIT_SIZE);
-
-    while ((j + 32) < len) {
-        gosthash_bytes(ctx, buf[j..], HASH_BIT_SIZE);
-        j += 32;
-    }
-
-    i = 0;
-    while (j < len) {
-        ctx.partial[i] = buf[j];
-        i += 1;
-        j += 1;
-    }
-    ctx.partial_bytes = i;
-}
-
-// Compute and save the 32-byte digest.
-pub fn gosthash_final(ctx: *GostHashCtx, digest: *[HASH_BYTE_SIZE]u8) void {
-    var i: usize = 0;
-    var j: usize = 0;
-    var a: u32 = undefined;
-
-    // adjust and mix in the last chunk
-    if (ctx.partial_bytes > 0) {
-        var it: usize = ctx.partial_bytes;
-        while (it < ctx.partial.len) : (it += 1) {
-            ctx.partial[it] = 0;
-        }
-        gosthash_bytes(ctx, ctx.partial[0..], ctx.partial_bytes << 3);
-    }
-
-    // mix in the length and the sum
-    gosthash_compress(&ctx.hash, &ctx.len);
-    gosthash_compress(&ctx.hash, &ctx.sum);
-
-    // convert the output to bytes
-    while (i < 8) : (i += 1) {
-        a = ctx.hash[i];
-        digest[j] = @truncate(u8, a);
-        digest[j + 1] = @truncate(u8, a >> 8);
-        digest[j + 2] = @truncate(u8, a >> 16);
-        digest[j + 3] = @truncate(u8, a >> 24);
-        j += 4;
-    }
-}
-
 fn digest_to_hex_string(digest: *[HASH_BYTE_SIZE]u8, string: *[2 * HASH_BYTE_SIZE]u8) void {
     var range: [16]u8 = .{ '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
     var i: usize = 0;
@@ -379,24 +376,23 @@ fn digest_to_hex_string(digest: *[HASH_BYTE_SIZE]u8, string: *[2 * HASH_BYTE_SIZ
 }
 
 test "gosthash_init" {
-    gosthash_init();
+    _ = GostHashCtx.init();
 }
 
 test "reset_struct" {
     var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    hash_struct.reset();
 }
 
 test "empty string" {
     gosthash_init();
-    var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    var hash_struct: GostHashCtx = GostHashCtx.init();
 
     var empty_block: []u8 = &.{};
-    gosthash_update(&hash_struct, empty_block);
+    hash_struct.update(empty_block);
 
     var digest: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct, &digest);
+    hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
@@ -405,19 +401,17 @@ test "empty string" {
 
 test "teststring1" {
     gosthash_init();
-    var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "a";
     var mystring: [mystring_const.len]u8 = undefined;
     for (mystring_const) |elem, i| {
         mystring[i] = elem;
     }
-
-    gosthash_update(&hash_struct, mystring[0..]);
+    hash_struct.update( mystring[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct, &digest);
+    hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
@@ -426,8 +420,7 @@ test "teststring1" {
 
 test "teststring2" {
     gosthash_init();
-    var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "message digest";
     var mystring: [mystring_const.len]u8 = undefined;
@@ -435,10 +428,10 @@ test "teststring2" {
         mystring[i] = elem;
     }
 
-    gosthash_update(&hash_struct, mystring[0..]);
+    hash_struct.update( mystring[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct, &digest);
+    hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
@@ -447,8 +440,7 @@ test "teststring2" {
 
 test "teststring3" {
     gosthash_init();
-    var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "U" ** 128;
     var mystring: [mystring_const.len]u8 = undefined;
@@ -456,10 +448,10 @@ test "teststring3" {
         mystring[i] = elem;
     }
 
-    gosthash_update(&hash_struct, mystring[0..]);
+    hash_struct.update( mystring[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct, &digest);
+    hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
@@ -468,8 +460,7 @@ test "teststring3" {
 
 test "teststring4" {
     gosthash_init();
-    var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "a" ** 1000000;
     var mystring: [mystring_const.len]u8 = undefined;
@@ -477,10 +468,10 @@ test "teststring4" {
         mystring[i] = elem;
     }
 
-    gosthash_update(&hash_struct, mystring[0..]);
+    hash_struct.update( mystring[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct, &digest);
+    hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
@@ -489,8 +480,7 @@ test "teststring4" {
 
 test "teststring5" {
     gosthash_init();
-    var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "The quick brown fox jumps over the lazy dog";
     var mystring: [mystring_const.len]u8 = undefined;
@@ -498,10 +488,10 @@ test "teststring5" {
         mystring[i] = elem;
     }
 
-    gosthash_update(&hash_struct, mystring[0..]);
+    hash_struct.update( mystring[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct, &digest);
+    hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
@@ -510,8 +500,7 @@ test "teststring5" {
 
 test "teststring6" {
     gosthash_init();
-    var hash_struct: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct);
+    var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "The quick brown fox jumps over the lazy cog";
     var mystring: [mystring_const.len]u8 = undefined;
@@ -519,10 +508,10 @@ test "teststring6" {
         mystring[i] = elem;
     }
 
-    gosthash_update(&hash_struct, mystring[0..]);
+    hash_struct.update( mystring[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct, &digest);
+    hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
@@ -533,8 +522,7 @@ test "piecewise hashing 1" {
     gosthash_init();
 
     // Load "a" twice
-    var hash_struct1: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct1);
+    var hash_struct1: GostHashCtx = GostHashCtx.init();
 
     const mystring_const1: []const u8 = "a";
     var mystring1: [mystring_const1.len]u8 = undefined;
@@ -542,7 +530,7 @@ test "piecewise hashing 1" {
         mystring1[i] = elem1;
     }
 
-    gosthash_update(&hash_struct1, mystring1[0..]);
+    hash_struct1.update( mystring1[0..]);
 
     const mystring_const2: []const u8 = "a";
     var mystring2: [mystring_const2.len]u8 = undefined;
@@ -550,13 +538,12 @@ test "piecewise hashing 1" {
         mystring2[j] = elem2;
     }
 
-    gosthash_update(&hash_struct1, mystring2[0..]);
+    hash_struct1.update( mystring2[0..]);
 
     var digest1: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct1, &digest1);
+    hash_struct1.make_final(&digest1);
 
-    var hash_struct2: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct2);
+    var hash_struct2: GostHashCtx = GostHashCtx.init();
 
     // Load "aa" once
     const mystring_const3: []const u8 = "aa";
@@ -565,12 +552,12 @@ test "piecewise hashing 1" {
         mystring3[i] = elem1;
     }
 
-    gosthash_update(&hash_struct2, mystring3[0..]);
+    hash_struct2.update(mystring3[0..]);
 
     var digest2: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct2, &digest2);
+    hash_struct2.make_final(&digest2);
 
-    // Hash should be equal
+    // Hashes should be equal
     assert(mem.eql(u8, digest1[0..], digest2[0..]));
 }
 
@@ -578,8 +565,7 @@ test "piecewise hashing 2" {
     gosthash_init();
 
     // Load "a" twice
-    var hash_struct1: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct1);
+    var hash_struct1: GostHashCtx = GostHashCtx.init();
 
     const mystring_const1: []const u8 = "The quick brown";
     var mystring1: [mystring_const1.len]u8 = undefined;
@@ -587,7 +573,7 @@ test "piecewise hashing 2" {
         mystring1[i] = elem1;
     }
 
-    gosthash_update(&hash_struct1, mystring1[0..]);
+    hash_struct1.update(mystring1[0..]);
 
     const mystring_const2: []const u8 = " fox jumps over the lazy dog";
     var mystring2: [mystring_const2.len]u8 = undefined;
@@ -595,13 +581,12 @@ test "piecewise hashing 2" {
         mystring2[j] = elem2;
     }
 
-    gosthash_update(&hash_struct1, mystring2[0..]);
+    hash_struct1.update(mystring2[0..]);
 
     var digest1: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct1, &digest1);
+    hash_struct1.make_final(&digest1);
 
-    var hash_struct2: GostHashCtx = undefined;
-    gosthash_reset(&hash_struct2);
+    var hash_struct2: GostHashCtx = GostHashCtx.init();
 
     // Load "aa" once
     const mystring_const3: []const u8 = "The quick brown fox jumps over the lazy dog";
@@ -610,11 +595,11 @@ test "piecewise hashing 2" {
         mystring3[i] = elem1;
     }
 
-    gosthash_update(&hash_struct2, mystring3[0..]);
+    hash_struct2.update(mystring3[0..]);
 
     var digest2: [32]u8 = .{0} ** 32;
-    gosthash_final(&hash_struct2, &digest2);
+    hash_struct2.make_final(&digest2);
 
-    // Hash should be equal
+    // Hashes should be equal
     assert(mem.eql(u8, digest1[0..], digest2[0..]));
 }
