@@ -4,7 +4,8 @@
 
 const std = @import("std");
 const mem = std.mem;
-const assert = @import("std").debug.assert;
+const testing = std.testing;
+const Allocator = std.mem.Allocator;
 
 var gost_sbox_1: [256]u32 = undefined;
 var gost_sbox_2: [256]u32 = undefined;
@@ -32,7 +33,7 @@ const GostHashCtx = struct {
     }
 
     //Mix in len bytes of data for the given buffer.
-    pub fn update(self: *Self, buf: []u8) void {
+    pub fn update(self: *Self, buf: []const u8) void {
         var i: usize = self.partial_bytes;
             var j: usize = 0;
             var len: usize = buf.len;
@@ -90,6 +91,14 @@ const GostHashCtx = struct {
                 digest[j + 3] = @truncate(u8, a >> 24);
                 j += 4;
             }
+    }
+
+    // Returns a slice owned by the caller
+    pub fn make_final_slice(self: *Self, allocator: *Allocator) !*[HASH_BYTE_SIZE]u8 {
+        var slice = try allocator.alloc(u8, HASH_BYTE_SIZE);
+        var pointer: *[HASH_BYTE_SIZE]u8 = slice[0..HASH_BYTE_SIZE];
+        make_final(self, pointer);
+        return pointer;
     }
 
     pub fn reset(self: *Self) void {
@@ -205,7 +214,7 @@ fn gosthash_compress(h: *[SUM_INT_WIDTH]u32, m: *[SUM_INT_WIDTH]u32) void {
         key[7] = ((w[1] & 0xff000000) >> 24) | ((w[3] & 0xff000000) >> 16) |
             ((w[5] & 0xff000000) >> 8) | (w[7] & 0xff000000);
 
-        r = h[i]; // encriphering transformation
+        r = h[i]; // enciphering transformation
         l = h[i + 1];
         gost_encrypt(key, &t, &l, &r);
 
@@ -324,7 +333,7 @@ fn gosthash_compress(h: *[SUM_INT_WIDTH]u32, m: *[SUM_INT_WIDTH]u32) void {
 }
 
 // Mix in a 32-byte chunk ("stage 3")
-fn gosthash_bytes(ctx: *GostHashCtx, buf: []u8, bits: usize) void {
+fn gosthash_bytes(ctx: *GostHashCtx, buf: []const u8, bits: usize) void {
     var i: usize = 0;
     var j: usize = 0;
     var a: u32 = undefined;
@@ -396,46 +405,38 @@ test "empty string" {
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
-    assert(mem.eql(u8, hash_string[0..], "ce85b99cc46752fffee35cab9a7b0278abb4c2d2055cff685af4912c49490f8d"));
+    const expected: []const u8 = "ce85b99cc46752fffee35cab9a7b0278abb4c2d2055cff685af4912c49490f8d";
+    try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
 
 test "teststring1" {
     gosthash_init();
     var hash_struct: GostHashCtx = GostHashCtx.init();
 
-    const mystring_const: []const u8 = "a";
-    var mystring: [mystring_const.len]u8 = undefined;
-    for (mystring_const) |elem, i| {
-        mystring[i] = elem;
-    }
-    hash_struct.update( mystring[0..]);
+    hash_struct.update("a"[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
     hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
-    assert(mem.eql(u8, hash_string[0..], "d42c539e367c66e9c88a801f6649349c21871b4344c6a573f849fdce62f314dd"));
+    const expected: []const u8 = "d42c539e367c66e9c88a801f6649349c21871b4344c6a573f849fdce62f314dd";
+    try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
 
 test "teststring2" {
     gosthash_init();
     var hash_struct: GostHashCtx = GostHashCtx.init();
 
-    const mystring_const: []const u8 = "message digest";
-    var mystring: [mystring_const.len]u8 = undefined;
-    for (mystring_const) |elem, i| {
-        mystring[i] = elem;
-    }
-
-    hash_struct.update( mystring[0..]);
+    hash_struct.update( "message digest"[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
     hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
-    assert(mem.eql(u8, hash_string[0..], "ad4434ecb18f2c99b60cbe59ec3d2469582b65273f48de72db2fde16a4889a4d"));
+    const expected: []const u8 = "ad4434ecb18f2c99b60cbe59ec3d2469582b65273f48de72db2fde16a4889a4d";
+    try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
 
 test "teststring3" {
@@ -443,19 +444,15 @@ test "teststring3" {
     var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "U" ** 128;
-    var mystring: [mystring_const.len]u8 = undefined;
-    for (mystring_const) |elem, i| {
-        mystring[i] = elem;
-    }
-
-    hash_struct.update( mystring[0..]);
+    hash_struct.update( mystring_const[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
     hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
-    assert(mem.eql(u8, hash_string[0..], "53a3a3ed25180cef0c1d85a074273e551c25660a87062a52d926a9e8fe5733a4"));
+    const expected: []const u8 = "53a3a3ed25180cef0c1d85a074273e551c25660a87062a52d926a9e8fe5733a4";
+    try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
 
 test "teststring4" {
@@ -463,19 +460,15 @@ test "teststring4" {
     var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "a" ** 1000000;
-    var mystring: [mystring_const.len]u8 = undefined;
-    for (mystring_const) |elem, i| {
-        mystring[i] = elem;
-    }
-
-    hash_struct.update( mystring[0..]);
+    hash_struct.update( mystring_const[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
     hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
-    assert(mem.eql(u8, hash_string[0..], "5c00ccc2734cdd3332d3d4749576e3c1a7dbaf0e7ea74e9fa602413c90a129fa"));
+    const expected: []const u8 = "5c00ccc2734cdd3332d3d4749576e3c1a7dbaf0e7ea74e9fa602413c90a129fa";
+    try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
 
 test "teststring5" {
@@ -483,19 +476,15 @@ test "teststring5" {
     var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "The quick brown fox jumps over the lazy dog";
-    var mystring: [mystring_const.len]u8 = undefined;
-    for (mystring_const) |elem, i| {
-        mystring[i] = elem;
-    }
-
-    hash_struct.update( mystring[0..]);
+    hash_struct.update( mystring_const[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
     hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
-    assert(mem.eql(u8, hash_string[0..], "77b7fa410c9ac58a25f49bca7d0468c9296529315eaca76bd1a10f376d1f4294"));
+    const expected: []const u8 = "77b7fa410c9ac58a25f49bca7d0468c9296529315eaca76bd1a10f376d1f4294";
+    try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
 
 test "teststring6" {
@@ -503,19 +492,15 @@ test "teststring6" {
     var hash_struct: GostHashCtx = GostHashCtx.init();
 
     const mystring_const: []const u8 = "The quick brown fox jumps over the lazy cog";
-    var mystring: [mystring_const.len]u8 = undefined;
-    for (mystring_const) |elem, i| {
-        mystring[i] = elem;
-    }
-
-    hash_struct.update( mystring[0..]);
+    hash_struct.update( mystring_const[0..]);
 
     var digest: [32]u8 = .{0} ** 32;
     hash_struct.make_final(&digest);
 
     var hash_string: [64]u8 = undefined;
     digest_to_hex_string(&digest, &hash_string);
-    assert(mem.eql(u8, hash_string[0..], "a3ebc4daaab78b0be131dab5737a7f67e602670d543521319150d2e14eeec445"));
+    const expected: []const u8 = "a3ebc4daaab78b0be131dab5737a7f67e602670d543521319150d2e14eeec445";
+    try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
 
 test "piecewise hashing 1" {
@@ -524,21 +509,8 @@ test "piecewise hashing 1" {
     // Load "a" twice
     var hash_struct1: GostHashCtx = GostHashCtx.init();
 
-    const mystring_const1: []const u8 = "a";
-    var mystring1: [mystring_const1.len]u8 = undefined;
-    for (mystring_const1) |elem1, i| {
-        mystring1[i] = elem1;
-    }
-
-    hash_struct1.update( mystring1[0..]);
-
-    const mystring_const2: []const u8 = "a";
-    var mystring2: [mystring_const2.len]u8 = undefined;
-    for (mystring_const2) |elem2, j| {
-        mystring2[j] = elem2;
-    }
-
-    hash_struct1.update( mystring2[0..]);
+    hash_struct1.update( "a"[0..]);
+    hash_struct1.update( "a"[0..]);
 
     var digest1: [32]u8 = .{0} ** 32;
     hash_struct1.make_final(&digest1);
@@ -546,60 +518,48 @@ test "piecewise hashing 1" {
     var hash_struct2: GostHashCtx = GostHashCtx.init();
 
     // Load "aa" once
-    const mystring_const3: []const u8 = "aa";
-    var mystring3: [mystring_const3.len]u8 = undefined;
-    for (mystring_const3) |elem1, i| {
-        mystring3[i] = elem1;
-    }
-
-    hash_struct2.update(mystring3[0..]);
+    hash_struct2.update("aa"[0..]);
 
     var digest2: [32]u8 = .{0} ** 32;
     hash_struct2.make_final(&digest2);
 
     // Hashes should be equal
-    assert(mem.eql(u8, digest1[0..], digest2[0..]));
+    try testing.expectEqualSlices(u8, digest1[0..], digest2[0..]);
 }
 
 test "piecewise hashing 2" {
     gosthash_init();
 
-    // Load "a" twice
     var hash_struct1: GostHashCtx = GostHashCtx.init();
 
-    const mystring_const1: []const u8 = "The quick brown";
-    var mystring1: [mystring_const1.len]u8 = undefined;
-    for (mystring_const1) |elem1, i| {
-        mystring1[i] = elem1;
-    }
-
-    hash_struct1.update(mystring1[0..]);
-
-    const mystring_const2: []const u8 = " fox jumps over the lazy dog";
-    var mystring2: [mystring_const2.len]u8 = undefined;
-    for (mystring_const2) |elem2, j| {
-        mystring2[j] = elem2;
-    }
-
-    hash_struct1.update(mystring2[0..]);
+    hash_struct1.update("The quick brown"[0..]);
+    hash_struct1.update(" fox jumps over the lazy dog"[0..]);
 
     var digest1: [32]u8 = .{0} ** 32;
     hash_struct1.make_final(&digest1);
 
     var hash_struct2: GostHashCtx = GostHashCtx.init();
-
-    // Load "aa" once
-    const mystring_const3: []const u8 = "The quick brown fox jumps over the lazy dog";
-    var mystring3: [mystring_const3.len]u8 = undefined;
-    for (mystring_const3) |elem1, i| {
-        mystring3[i] = elem1;
-    }
-
-    hash_struct2.update(mystring3[0..]);
+    hash_struct2.update("The quick brown fox jumps over the lazy dog"[0..]);
 
     var digest2: [32]u8 = .{0} ** 32;
     hash_struct2.make_final(&digest2);
 
     // Hashes should be equal
-    assert(mem.eql(u8, digest1[0..], digest2[0..]));
+    try testing.expectEqualSlices(u8, digest1[0..], digest2[0..]);
+}
+
+test "create digest by allocator" {
+    gosthash_init();
+        var hash_struct: GostHashCtx = GostHashCtx.init();
+
+        hash_struct.update("a"[0..]);
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const allocator = &arena.allocator;
+
+        var digest = try hash_struct.make_final_slice(allocator);
+        var hash_string: [64]u8 = undefined;
+        digest_to_hex_string(digest, &hash_string);
+        const expected: []const u8 = "d42c539e367c66e9c88a801f6649349c21871b4344c6a573f849fdce62f314dd";
+        try testing.expectEqualSlices(u8, expected[0..], hash_string[0..]);
 }
