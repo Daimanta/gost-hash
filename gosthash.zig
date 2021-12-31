@@ -94,7 +94,7 @@ const GostHashCtx = struct {
     }
 
     // Returns a slice owned by the caller
-    pub fn make_final_slice(self: *Self, allocator: *Allocator) !*[HASH_BYTE_SIZE]u8 {
+    pub fn make_final_slice(self: *Self, allocator: Allocator) !*[HASH_BYTE_SIZE]u8 {
         var slice = try allocator.alloc(u8, HASH_BYTE_SIZE);
         var pointer: *[HASH_BYTE_SIZE]u8 = slice[0..HASH_BYTE_SIZE];
         make_final(self, pointer);
@@ -555,7 +555,7 @@ test "create digest by allocator" {
         hash_struct.update("a"[0..]);
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        const allocator = &arena.allocator;
+        const allocator = arena.allocator();
 
         var digest = try hash_struct.make_final_slice(allocator);
         var hash_string: [64]u8 = undefined;
